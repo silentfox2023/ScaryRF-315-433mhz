@@ -7,26 +7,26 @@
 NimBLEAdvertising *pAdvertising;
 //BLE END
 
-//Wifi
-#include <WiFi.h>
-#include <esp_wifi.h>
 
 #ifdef U8X8_HAVE_HW_I2C
 #include <Wire.h>
 #endif
 
-#define RX_PIN 4         // Pino de recepção
-#define TX_PIN 2         // Pino de transmissão
-#define BUTTON_PIN 14    // Pino do botão
-#define BUTTON_PIN_DIR 27    // Pino do botão
-#define BUTTON_PIN_ESQ 12    // Pino do botão
-#define BUTTON_PIN_UP 26    // Pino do botão
-#define FREQUENCY_SWITCH_PIN 13 // Pino do interruptor para mudar a frequência
+#define RX_PIN 27         // CC1101接收数据引脚接IRQ
+#define TX_PIN 23         // CC1101发送数据引脚接CE
+#define BUTTON_PIN 0    // 确定健
+#define BUTTON_PIN_DIR 35    // 右键34
+#define BUTTON_PIN_ESQ 34    // 左键35
+#define BUTTON_PIN_UP 12    // 返回键
+#define FREQUENCY_SWITCH_PIN 14 // 日常是433.92MHz，按下后是315MHz
 #define SCREEN_WIDTH 128 // Largura da tela OLED
 #define SCREEN_HEIGHT 64 // Altura da tela OLED
 
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
+//U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, 22, 21, U8X8_PIN_NONE);
+U8G2_SSD1306_128X64_NONAME_F_SW_I2C u8g2(U8G2_R0, 22, 21, /* reset=*/ U8X8_PIN_NONE);
 
+//U8X8_SSD1306_128X64_UNIVISION_SW_I2C u8x8( SCL, SDA, U8X8_PIN_NONE);
+//U8X8_SSD1306_128X64_NONAME_F_HW_I2C u8x8( 22, 21, U8X8_PIN_NONE);
 #define scary_width 128
 #define scary_height 64
 unsigned const char scary_bits[] = {
@@ -125,7 +125,6 @@ unsigned long receivedValue = 0;
 int receivedBitLength = 0;
 int receivedProtocol = 0;
 const int rssi_threshold = -75;
-float mhz;
 
 static const uint32_t subghz_frequency_list[] = {
   300000000, 303875000, 304250000, 310000000, 315000000, 318000000,
@@ -189,6 +188,7 @@ const menu_entry_type menu_entry_list[] = {
   { NULL, 0, NULL, NULL }
 };
 
+
 bool in_menu = true; // Variável para rastrear se estamos no menu
 
 void draw_menu(struct menu_state *state) {
@@ -229,6 +229,49 @@ void to_left(struct menu_state *state) {
 
 struct menu_state current_state = { 0, menu_entry_list };
 
+// 定义消抖时间
+const int debounceTime = 50;
+
+// 记录上一次BUTTON_PIN_DIR按键状态和时间
+int lastButtonDirState = LOW;
+unsigned long lastButtonDirPressTime = 0;
+
+// 记录上一次BUTTON_PIN_ESQ按键状态和时间
+int lastButtonEsqState = LOW;
+unsigned long lastButtonEsqPressTime = 0;
+
+// 检查BUTTON_PIN_DIR按键是否真的被按下
+bool isButtonDirPressed() {
+    int currentState = digitalRead(BUTTON_PIN_DIR);
+    if (currentState == HIGH && lastButtonDirState == LOW) {
+        lastButtonDirPressTime = millis();
+    }
+    if (currentState == HIGH && (millis() - lastButtonDirPressTime) > debounceTime) {
+        lastButtonDirState = HIGH;
+        return true;
+    }
+    if (currentState == LOW) {
+        lastButtonDirState = LOW;
+    }
+    return false;
+}
+
+// 检查BUTTON_PIN_ESQ按键是否真的被按下
+bool isButtonEsqPressed() {
+    int currentState = digitalRead(BUTTON_PIN_ESQ);
+    if (currentState == HIGH && lastButtonEsqState == LOW) {
+        lastButtonEsqPressTime = millis();
+    }
+    if (currentState == HIGH && (millis() - lastButtonEsqPressTime) > debounceTime) {
+        lastButtonEsqState = HIGH;
+        return true;
+    }
+    if (currentState == LOW) {
+        lastButtonEsqState = LOW;
+    }
+    return false;
+}
+
 void setup() { // ==============================SETUP=============================================
   Serial.begin(115200);
 
@@ -236,8 +279,8 @@ void setup() { // ==============================SETUP===========================
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(FREQUENCY_SWITCH_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN_UP, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_DIR, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_ESQ, INPUT_PULLUP);
+  pinMode(BUTTON_PIN_DIR, INPUT);
+  pinMode(BUTTON_PIN_ESQ, INPUT);
 
   u8g2.begin();
   u8g2.enableUTF8Print();  // Permite imprimir caracteres UTF-8
@@ -259,10 +302,8 @@ void setup() { // ==============================SETUP===========================
 
   if (digitalRead(FREQUENCY_SWITCH_PIN) == LOW) {
     ELECHOUSE_cc1101.setMHZ(315);
-    mhz = 315.00;
   } else {
     ELECHOUSE_cc1101.setMHZ(433.92);
-    mhz = 433.00;
   }
 
   ELECHOUSE_cc1101.SetRx();
@@ -273,22 +314,26 @@ void setup() { // ==============================SETUP===========================
   Blesetup();
 }
 
-
-
-
 void loop() {
 
   int8_t event = 0;
 
-  if (digitalRead(BUTTON_PIN_DIR) == LOW) {
+  if (digitalRead(BUTTON_PIN_DIR)) {
     event = 1; // Representa U8X8_MSG_GPIO_MENU_NEXT
-  } else if (digitalRead(BUTTON_PIN_ESQ) == LOW) {
+    Serial.println("Button DIR pressed");
+  } else if (digitalRead(BUTTON_PIN_ESQ)) {
     event = 2; // Representa U8X8_MSG_GPIO_MENU_PREV
+    Serial.println("Button ESQ pressed");
   } else if (digitalRead(BUTTON_PIN) == LOW) {
     event = 3; // Representa U8X8_MSG_GPIO_MENU_SELECT
+    Serial.println("Button SELECT pressed");
   } else if (digitalRead(BUTTON_PIN_UP) == LOW) {
     event = 4; // Representa a função de voltar para o menu principal
+    Serial.println("Button UP pressed");
   }
+
+    Serial.print("Event: ");
+    Serial.println(event);
 
   if (in_menu) {
     if (event == 1) {
@@ -312,7 +357,6 @@ void loop() {
             Raw();
           }
         }
-        //________ End RAW
         if (strcmp(current_state.menu[current_state.position].name, "Analyser") == 0) { //Funçao Analyser
           while (digitalRead(BUTTON_PIN_UP) != LOW) {
             Analyser();     
@@ -326,12 +370,7 @@ void loop() {
             }
           }
         } //________ End RANDOM
-        if (strcmp(current_state.menu[current_state.position].name, "Deauther") == 0) { //Funçao Deauther
-        while (digitalRead(BUTTON_PIN_UP) != LOW) {
-            Deauther();
-        }
-        }//________ End Deauther
-        if (strcmp(current_state.menu[current_state.position].name, "Evil portal") == 0) { //Funçao EVIL PORTAL
+        if (strcmp(current_state.menu[current_state.position].name, "Evil portal") == 0) { //Funçao Evil Portal
         u8g2.clearBuffer();
         u8g2.setCursor(0, 10);
         u8g2.print("In progress...");
